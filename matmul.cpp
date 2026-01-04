@@ -1,6 +1,9 @@
 #include <chrono>
 #include <cstdlib>
+#include <functional>
+#include <iomanip>
 #include <iostream>
+#include <string>
 #include <vector>
 
 /**
@@ -20,17 +23,20 @@ void matmul_naive(int n,
     }
 }
 
+/*
+    we’d like to iterate in col-order in the inner loop as much as possible.
+*/
 void matmul_cache_friendly(int n,
                            const double* __restrict A,
                            const double* __restrict B,
                            double* __restrict C) {
-    for (int i = 0; i < n; ++i) {
+    for (int r = 0; r < n; ++r) {
         for (int k = 0; k < n; ++k) {
             double a = A[i * n + k];
-            for (int j = 0; j < n; ++j) {
-                // C[i*n + j] → good, sequential in memory.
-                // B[k*n + j] → good, sequential in memory.
-                C[i * n + j] += a * B[k * n + j];
+            for (int c = 0; c < n; ++c) {
+                // C[r*n + c] → good, sequential in memory.
+                // B[k*n + c] → good, sequential in memory.
+                C[r * n + c] += a * B[k * n + c];
             }
         }
     }
@@ -66,6 +72,28 @@ void matmul_cache_tiled(int n,
     }
 }
 
+// Define a function pointer type for the matmul signature
+typedef void (*matmul_ptr)(int, const double*, const double*, double*);
+
+// Optimized benchmark helper using raw function pointers
+void benchmark(
+        const char* name, matmul_ptr func, int N, const double* A, const double* B, double* C) {
+
+    // Clear C to ensure a fair test (and to warm up the cache for C)
+    std::fill(C, C + (size_t)N * N, 0.0);
+
+    auto start = std::chrono::high_resolution_clock::now();
+
+    // Direct call through function pointer
+    func(N, A, B, C);
+
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> duration = end - start;
+
+    std::cout << std::left << std::setw(20) << name << ": " << std::fixed << std::setprecision(3)
+              << duration.count() << " ms" << std::endl;
+}
+
 int main(int argc, char* argv[]) {
     if (argc < 2) {
         std::cerr << "Usage: " << argv[0] << " <matrix_size>\n";
@@ -86,32 +114,15 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // basic version
-    auto start = std::chrono::high_resolution_clock::now();
-    matmul_naive(N, A, B, C);
-    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::high_resolution_clock::now() - start);
+    std::cout << "Matrix Size: " << N << "x" << N << "\n";
+    std::cout << "-------------------------------------------\n";
 
-    std::cout << "Matrix size: " << N << "x" << N << std::endl;
-    std::cout << "Matrix multiplication time: " << duration.count() / 1000.0 << " ms" << std::endl;
+    // Benchmarking using the function pointer logic
+    benchmark("Naive", matmul_naive, N, A, B, C);
+    benchmark("Cache Friendly", matmul_cache_friendly, N, A, B, C);
+    benchmark("Tiled", matmul_cache_tiled, N, A, B, C);
 
-    // cache friendly version
-    start = std::chrono::high_resolution_clock::now();
-    matmul_cache_friendly(N, A, B, C);
-    duration = std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::high_resolution_clock::now() - start);
-
-    std::cout << "Cache-friendly matrix multiplication time: " << duration.count() / 1000.0
-              << " ms" << std::endl;
-
-    // memory blocked version
-    start = std::chrono::high_resolution_clock::now();
-    matmul_cache_tiled(N, A, B, C);
-    duration = std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::high_resolution_clock::now() - start);
-
-    std::cout << "matmul_cache_tiled time: " << duration.count() / 1000.0 << " ms" << std::endl;
-
+    // Cleanup
     delete[] A;
     delete[] B;
     delete[] C;
